@@ -1,6 +1,7 @@
+import json
+from pathlib import Path
 
 import pandas as pd
-import plotly.express as px
 import streamlit as st
 
 
@@ -8,8 +9,8 @@ import streamlit as st
 # 기본 설정
 # -----------------------------
 st.set_page_config(
-    page_title="탐색 | 뇌졸중 예측 실습실",
-    page_icon="🔎",
+    page_title="뇌졸중 예측 실습실",
+    page_icon="🧠",
     layout="wide",
 )
 
@@ -18,15 +19,66 @@ DATA_URL = (
     "k-suhyeon03/data/refs/heads/main/stroke.csv"
 )
 
+RECORD_DIR = Path("내_기록")
+RECORD_FILE = RECORD_DIR / "뇌졸중_데이터_기록.json"
+
 
 # -----------------------------
-# 제목
+# 앱 제목
 # -----------------------------
-st.title("🔎 데이터 탐색")
-st.caption(
-    "나이, 평균 혈당, 건강 상태, 흡연 상태와 "
-    "뇌졸중 발생의 관계를 데이터로 살펴봅니다."
-)
+st.title("🧠 뇌졸중 예측 실습실")
+st.caption("데이터를 살펴보고 각 열의 의미를 직접 정리해 보는 공간입니다.")
+
+
+# -----------------------------
+# 기록 파일 불러오기
+# -----------------------------
+def load_notes():
+    if RECORD_FILE.exists():
+        try:
+            with RECORD_FILE.open("r", encoding="utf-8") as file:
+                data = json.load(file)
+
+            if isinstance(data, dict):
+                return {
+                    "meanings": data.get("meanings", {}),
+                    "source": data.get("source", ""),
+                }
+
+        except (json.JSONDecodeError, OSError):
+            st.warning(
+                "기존 기록 파일을 읽지 못해 "
+                "빈 기록으로 시작합니다."
+            )
+
+    return {
+        "meanings": {},
+        "source": "",
+    }
+
+
+# -----------------------------
+# 기록 파일 저장하기
+# -----------------------------
+def save_notes(meanings, source):
+    RECORD_DIR.mkdir(parents=True, exist_ok=True)
+
+    data = {
+        "meanings": meanings,
+        "source": source,
+    }
+
+    with RECORD_FILE.open("w", encoding="utf-8") as file:
+        json.dump(
+            data,
+            file,
+            ensure_ascii=False,
+            indent=2,
+        )
+
+
+if "saved_notes" not in st.session_state:
+    st.session_state.saved_notes = load_notes()
 
 
 # -----------------------------
@@ -49,539 +101,265 @@ except Exception as error:
     st.stop()
 
 
+# 필요한 열 확인
 required_columns = [
+    "id",
+    "gender",
     "age",
-    "avg_glucose_level",
     "hypertension",
     "heart_disease",
+    "ever_married",
+    "work_type",
+    "Residence_type",
+    "avg_glucose_level",
     "bmi",
     "smoking_status",
     "stroke",
 ]
 
 missing_columns = [
-    column for column in required_columns
+    column
+    for column in required_columns
     if column not in df.columns
 ]
 
 if missing_columns:
     st.error(
-        "필요한 열이 없습니다: "
+        "CSV에서 예상한 열을 찾지 못했습니다: "
         + ", ".join(missing_columns)
     )
     st.stop()
 
 
-# 분석에 사용할 열을 숫자형으로 변환
-for column in [
-    "age",
-    "avg_glucose_level",
-    "hypertension",
-    "heart_disease",
-    "stroke",
-]:
-    df[column] = pd.to_numeric(
-        df[column],
-        errors="coerce",
-    )
-
-
-# 뇌졸중 발생 여부가 확인된 행만 그룹 비교에 사용
-stroke_df = df[df["stroke"].isin([0, 1])].copy()
-
-stroke_df["뇌졸중 여부"] = stroke_df["stroke"].map({
-    0: "뇌졸중 없음",
-    1: "뇌졸중 있음",
-})
-
-
 # -----------------------------
-# 1. 나이와 평균 혈당 분포
+# 1. 데이터 소개
 # -----------------------------
-st.header("1. 나이와 평균 혈당의 분포")
+st.subheader("1. 데이터 소개")
 
 st.write(
-    "히스토그램은 값이 특정 구간에 얼마나 많이 "
-    "분포하는지 보여 줍니다."
-)
-
-col1, col2 = st.columns(2)
-
-with col1:
-    age_data = df[["age"]].dropna()
-
-    fig_age = px.histogram(
-        age_data,
-        x="age",
-        nbins=30,
-        title="나이 분포",
-        labels={
-            "age": "나이",
-            "count": "사람 수",
-        },
-    )
-
-    fig_age.update_layout(
-        xaxis_title="나이",
-        yaxis_title="사람 수",
-        bargap=0.05,
-    )
-
-    st.plotly_chart(
-        fig_age,
-        use_container_width=True,
-    )
-
-with col2:
-    glucose_data = df[["avg_glucose_level"]].dropna()
-
-    fig_glucose = px.histogram(
-        glucose_data,
-        x="avg_glucose_level",
-        nbins=30,
-        title="평균 혈당 분포",
-        labels={
-            "avg_glucose_level": "평균 혈당",
-            "count": "사람 수",
-        },
-    )
-
-    fig_glucose.update_layout(
-        xaxis_title="평균 혈당",
-        yaxis_title="사람 수",
-        bargap=0.05,
-    )
-
-    st.plotly_chart(
-        fig_glucose,
-        use_container_width=True,
-    )
-
-
-# -----------------------------
-# 2. 뇌졸중 여부에 따른 상자그림
-# -----------------------------
-st.header("2. 뇌졸중 여부에 따른 나이와 평균 혈당 비교")
-
-st.write(
-    "상자그림은 중앙값, 사분위수, 자료의 퍼짐 정도를 "
-    "비교하는 그래프입니다. 두 그룹의 평균값도 표로 "
-    "확인할 수 있습니다."
-)
-
-box_col1, box_col2 = st.columns(2)
-
-with box_col1:
-    age_box_data = stroke_df[
-        ["뇌졸중 여부", "age"]
-    ].dropna()
-
-    fig_age_box = px.box(
-        age_box_data,
-        x="뇌졸중 여부",
-        y="age",
-        color="뇌졸중 여부",
-        category_orders={
-            "뇌졸중 여부": [
-                "뇌졸중 없음",
-                "뇌졸중 있음",
-            ]
-        },
-        title="뇌졸중 여부에 따른 나이",
-        labels={
-            "age": "나이",
-            "뇌졸중 여부": "그룹",
-        },
-        points="outliers",
-    )
-
-    fig_age_box.update_layout(
-        showlegend=False,
-        xaxis_title="뇌졸중 여부",
-        yaxis_title="나이",
-    )
-
-    st.plotly_chart(
-        fig_age_box,
-        use_container_width=True,
-    )
-
-with box_col2:
-    glucose_box_data = stroke_df[
-        ["뇌졸중 여부", "avg_glucose_level"]
-    ].dropna()
-
-    fig_glucose_box = px.box(
-        glucose_box_data,
-        x="뇌졸중 여부",
-        y="avg_glucose_level",
-        color="뇌졸중 여부",
-        category_orders={
-            "뇌졸중 여부": [
-                "뇌졸중 없음",
-                "뇌졸중 있음",
-            ]
-        },
-        title="뇌졸중 여부에 따른 평균 혈당",
-        labels={
-            "avg_glucose_level": "평균 혈당",
-            "뇌졸중 여부": "그룹",
-        },
-        points="outliers",
-    )
-
-    fig_glucose_box.update_layout(
-        showlegend=False,
-        xaxis_title="뇌졸중 여부",
-        yaxis_title="평균 혈당",
-    )
-
-    st.plotly_chart(
-        fig_glucose_box,
-        use_container_width=True,
-    )
-
-
-# 두 그룹의 평균값 표
-age_means = stroke_df.groupby(
-    "뇌졸중 여부"
-)["age"].mean()
-
-glucose_means = stroke_df.groupby(
-    "뇌졸중 여부"
-)["avg_glucose_level"].mean()
-
-mean_table = pd.DataFrame({
-    "뇌졸중 여부": [
-        "뇌졸중 없음",
-        "뇌졸중 있음",
-    ],
-})
-
-mean_table["평균 나이"] = mean_table[
-    "뇌졸중 여부"
-].map(age_means)
-
-mean_table["평균 혈당"] = mean_table[
-    "뇌졸중 여부"
-].map(glucose_means)
-
-mean_table["평균 나이"] = mean_table[
-    "평균 나이"
-].round(2)
-
-mean_table["평균 혈당"] = mean_table[
-    "평균 혈당"
-].round(2)
-
-st.subheader("두 그룹의 평균값")
-
-st.dataframe(
-    mean_table,
-    use_container_width=True,
-    hide_index=True,
+    "이 데이터는 사람별 특성과 건강 관련 정보를 "
+    "열로 정리한 CSV 자료입니다. 각 행은 한 사람의 기록이며, "
+    "`stroke` 열은 뇌졸중 발생 여부를 나타내는 값으로 "
+    "사용됩니다. 아래에서 데이터의 크기와 열 구성을 "
+    "확인해 보세요."
 )
 
 
 # -----------------------------
-# 3. 고혈압 여부에 따른 뇌졸중 비율
+# 2. 숫자 카드 4개
 # -----------------------------
-st.header("3. 고혈압 여부에 따른 뇌졸중 비율")
+total_people = len(df)
+column_count = len(df.columns)
 
-st.write(
-    "각 그룹에서 뇌졸중 발생 여부가 확인된 사람 중 "
-    "stroke가 1인 사람의 비율을 계산합니다."
+stroke_values = pd.to_numeric(
+    df["stroke"],
+    errors="coerce",
 )
 
-hypertension_df = stroke_df[
-    stroke_df["hypertension"].isin([0, 1])
-].copy()
+stroke_count = int((stroke_values == 1).sum())
 
-hypertension_df["고혈압 여부"] = hypertension_df[
-    "hypertension"
-].map({
-    0: "고혈압 없음",
-    1: "고혈압 있음",
-})
-
-hypertension_rate = (
-    hypertension_df
-    .groupby("고혈압 여부")
-    .agg(
-        전체 인원=("stroke", "size"),
-        뇌졸중 인원=("stroke", "sum"),
-        뇌졸중 비율=("stroke", "mean"),
-    )
-    .reset_index()
+stroke_ratio = (
+    stroke_count / total_people * 100
+    if total_people > 0
+    else 0
 )
 
-hypertension_rate["뇌졸중 비율(%)"] = (
-    hypertension_rate["뇌졸중 비율"] * 100
+card1, card2, card3, card4 = st.columns(4)
+
+card1.metric(
+    "전체 사람 수",
+    f"{total_people:,}명",
 )
 
-hypertension_rate["뇌졸중 비율(%)"] = (
-    hypertension_rate["뇌졸중 비율(%)"].round(2)
+card2.metric(
+    "열 개수",
+    f"{column_count:,}개",
 )
 
-fig_hypertension = px.bar(
-    hypertension_rate,
-    x="고혈압 여부",
-    y="뇌졸중 비율(%)",
-    text="뇌졸중 비율(%)",
-    title="고혈압 여부에 따른 뇌졸중 비율",
-    labels={
-        "고혈압 여부": "고혈압 여부",
-        "뇌졸중 비율(%)": "뇌졸중 비율(%)",
-    },
+card3.metric(
+    "stroke가 1인 사람 수",
+    f"{stroke_count:,}명",
 )
 
-fig_hypertension.update_traces(
-    texttemplate="%{text:.2f}%",
-    textposition="outside",
-)
-
-fig_hypertension.update_layout(
-    yaxis_title="뇌졸중 비율(%)",
-    xaxis_title="고혈압 여부",
-    yaxis_rangemode="tozero",
-)
-
-st.plotly_chart(
-    fig_hypertension,
-    use_container_width=True,
-)
-
-st.dataframe(
-    hypertension_rate[
-        [
-            "고혈압 여부",
-            "전체 인원",
-            "뇌졸중 인원",
-            "뇌졸중 비율(%)",
-        ]
-    ],
-    use_container_width=True,
-    hide_index=True,
-)
-
-
-# -----------------------------
-# 4. 심장병 여부에 따른 뇌졸중 비율
-# -----------------------------
-st.header("4. 심장병 여부에 따른 뇌졸중 비율")
-
-heart_df = stroke_df[
-    stroke_df["heart_disease"].isin([0, 1])
-].copy()
-
-heart_df["심장병 여부"] = heart_df[
-    "heart_disease"
-].map({
-    0: "심장병 없음",
-    1: "심장병 있음",
-})
-
-heart_rate = (
-    heart_df
-    .groupby("심장병 여부")
-    .agg(
-        전체 인원=("stroke", "size"),
-        뇌졸중 인원=("stroke", "sum"),
-        뇌졸중 비율=("stroke", "mean"),
-    )
-    .reset_index()
-)
-
-heart_rate["뇌졸중 비율(%)"] = (
-    heart_rate["뇌졸중 비율"] * 100
-)
-
-heart_rate["뇌졸중 비율(%)"] = (
-    heart_rate["뇌졸중 비율(%)"].round(2)
-)
-
-fig_heart = px.bar(
-    heart_rate,
-    x="심장병 여부",
-    y="뇌졸중 비율(%)",
-    text="뇌졸중 비율(%)",
-    title="심장병 여부에 따른 뇌졸중 비율",
-    labels={
-        "심장병 여부": "심장병 여부",
-        "뇌졸중 비율(%)": "뇌졸중 비율(%)",
-    },
-)
-
-fig_heart.update_traces(
-    texttemplate="%{text:.2f}%",
-    textposition="outside",
-)
-
-fig_heart.update_layout(
-    yaxis_title="뇌졸중 비율(%)",
-    xaxis_title="심장병 여부",
-    yaxis_rangemode="tozero",
-)
-
-st.plotly_chart(
-    fig_heart,
-    use_container_width=True,
-)
-
-st.dataframe(
-    heart_rate[
-        [
-            "심장병 여부",
-            "전체 인원",
-            "뇌졸중 인원",
-            "뇌졸중 비율(%)",
-        ]
-    ],
-    use_container_width=True,
-    hide_index=True,
-)
-
-
-# -----------------------------
-# 5. BMI 빈 값과 뇌졸중 비율
-# -----------------------------
-st.header("5. BMI가 비어 있는 사람들의 뇌졸중 비율")
-
-st.write(
-    "BMI가 비어 있는 사람들 중 뇌졸중 발생 여부가 "
-    "확인된 사람을 대상으로 비율을 계산하고, "
-    "전체 데이터의 뇌졸중 비율과 비교합니다."
-)
-
-missing_bmi_df = df[df["bmi"].isna()].copy()
-
-missing_bmi_known = missing_bmi_df[
-    missing_bmi_df["stroke"].isin([0, 1])
-]
-
-all_known = df[df["stroke"].isin([0, 1])]
-
-missing_bmi_people = len(missing_bmi_df)
-missing_bmi_stroke_known = len(missing_bmi_known)
-all_stroke_known = len(all_known)
-
-missing_bmi_stroke_count = int(
-    (missing_bmi_known["stroke"] == 1).sum()
-)
-
-all_stroke_count = int(
-    (all_known["stroke"] == 1).sum()
-)
-
-missing_bmi_rate = (
-    missing_bmi_stroke_count / missing_bmi_stroke_known * 100
-    if missing_bmi_stroke_known > 0
-    else None
-)
-
-all_stroke_rate = (
-    all_stroke_count / all_stroke_known * 100
-    if all_stroke_known > 0
-    else None
-)
-
-bmi_comparison = pd.DataFrame({
-    "구분": [
-        "BMI가 비어 있는 사람",
-        "전체 사람",
-    ],
-    "해당 인원": [
-        missing_bmi_people,
-        len(df),
-    ],
-    "뇌졸중 발생 여부 확인 인원": [
-        missing_bmi_stroke_known,
-        all_stroke_known,
-    ],
-    "뇌졸중 인원": [
-        missing_bmi_stroke_count,
-        all_stroke_count,
-    ],
-    "뇌졸중 비율(%)": [
-        (
-            round(missing_bmi_rate, 2)
-            if missing_bmi_rate is not None
-            else None
-        ),
-        (
-            round(all_stroke_rate, 2)
-            if all_stroke_rate is not None
-            else None
-        ),
-    ],
-})
-
-st.dataframe(
-    bmi_comparison,
-    use_container_width=True,
-    hide_index=True,
+card4.metric(
+    "stroke가 1인 비율",
+    f"{stroke_ratio:.2f}%",
 )
 
 st.caption(
-    "※ BMI가 비어 있는 사람 수는 BMI 결측 행 전체를 센 값입니다. "
-    "뇌졸중 비율은 stroke 값이 0 또는 1로 확인되는 사람만 "
-    "분모에 포함해 계산합니다."
+    "※ 비율은 stroke가 1인 사람 수를 전체 사람 수로 "
+    "나누어 계산했습니다."
 )
 
 
 # -----------------------------
-# 6. 흡연 상태별 사람 수
+# 3. 열 이름과 데이터 특성
 # -----------------------------
-st.header("6. 흡연 상태별 사람 수")
+st.subheader("2. 열 이름과 데이터 특성")
 
 st.write(
-    "흡연 상태의 각 값에 해당하는 사람 수를 집계합니다. "
-    "흡연 상태가 비어 있는 경우도 별도로 표시합니다."
+    "‘우리말 뜻’ 칸에 교재를 참고해 직접 입력한 다음, "
+    "아래 저장 버튼을 눌러 주세요."
 )
 
-smoking_data = df["smoking_status"].fillna(
-    "빈 값"
-).replace("", "빈 값")
+meanings = st.session_state.saved_notes.get(
+    "meanings", {}
+)
 
-smoking_counts = (
-    smoking_data
-    .value_counts()
-    .rename_axis("흡연 상태")
-    .reset_index(name="사람 수")
+rows = []
+
+for column in df.columns:
+    non_null = df[column].dropna()
+    unique_count = non_null.nunique()
+
+    if pd.api.types.is_numeric_dtype(df[column]):
+        kind = (
+            f"숫자형 "
+            f"(서로 다른 값 {unique_count:,}종)"
+        )
+    else:
+        kind = (
+            f"문자형 "
+            f"(서로 다른 값 {unique_count:,}종)"
+        )
+
+    rows.append({
+        "열 이름": column,
+        "우리말 뜻": meanings.get(column, ""),
+        "값의 종류": kind,
+        "빈 값 개수": int(df[column].isna().sum()),
+    })
+
+
+info_df = pd.DataFrame(rows)
+
+edited_info = st.data_editor(
+    info_df,
+    use_container_width=True,
+    hide_index=True,
+    num_rows="fixed",
+    disabled=[
+        "열 이름",
+        "값의 종류",
+        "빈 값 개수",
+    ],
+    column_config={
+        "열 이름": st.column_config.TextColumn(
+            "열 이름"
+        ),
+        "우리말 뜻": st.column_config.TextColumn(
+            "우리말 뜻",
+            help="교재를 참고해 열의 뜻을 직접 입력하세요.",
+            width="large",
+        ),
+        "값의 종류": st.column_config.TextColumn(
+            "값의 종류",
+            width="large",
+        ),
+        "빈 값 개수": st.column_config.NumberColumn(
+            "빈 값 개수",
+            format="%d",
+        ),
+    },
+    key="column_info_editor",
+)
+
+
+# -----------------------------
+# 4. 데이터 처음 다섯 줄
+# -----------------------------
+st.subheader("3. 데이터 처음 다섯 줄")
+
+st.write(
+    "아래는 원본 CSV에서 처음 다섯 행을 표시한 것입니다. "
+    "빈 값은 빈칸으로 나타납니다."
 )
 
 st.dataframe(
-    smoking_counts,
+    df.head(5),
     use_container_width=True,
     hide_index=True,
 )
 
-fig_smoking = px.bar(
-    smoking_counts,
-    x="흡연 상태",
-    y="사람 수",
-    text="사람 수",
-    title="흡연 상태별 사람 수",
-    labels={
-        "흡연 상태": "흡연 상태",
-        "사람 수": "사람 수",
-    },
+
+# -----------------------------
+# 5. 데이터 출처 입력
+# -----------------------------
+st.subheader("4. 데이터 출처")
+
+st.write(
+    "교재에 적힌 데이터 출처를 입력하세요. "
+    "입력한 내용은 우리말 뜻과 함께 JSON 파일로 저장됩니다."
 )
 
-fig_smoking.update_traces(
-    textposition="outside",
+source_value = st.text_area(
+    "데이터 출처",
+    value=st.session_state.saved_notes.get(
+        "source", ""
+    ),
+    placeholder="교재에 적힌 데이터 출처를 입력하세요.",
+    height=100,
+    key="source_editor",
 )
 
-fig_smoking.update_layout(
-    xaxis_title="흡연 상태",
-    yaxis_title="사람 수",
-    yaxis_rangemode="tozero",
-)
 
-st.plotly_chart(
-    fig_smoking,
+# -----------------------------
+# 6. 저장 버튼
+# -----------------------------
+if st.button(
+    "💾 우리말 뜻과 출처 저장",
+    type="primary",
     use_container_width=True,
-)
+):
+    meaning_dict = {}
+
+    for _, row in edited_info.iterrows():
+        meaning = row["우리말 뜻"]
+
+        if pd.isna(meaning):
+            meaning = ""
+        else:
+            meaning = str(meaning)
+
+        meaning_dict[str(row["열 이름"])] = meaning
+
+    try:
+        save_notes(
+            meaning_dict,
+            source_value,
+        )
+
+        st.session_state.saved_notes = {
+            "meanings": meaning_dict,
+            "source": source_value,
+        }
+
+        st.success(
+            f"저장했습니다: {RECORD_FILE.as_posix()}"
+        )
+
+    except OSError as error:
+        st.error(
+            "기록을 저장하지 못했습니다. "
+            "실행 환경의 폴더 쓰기 권한을 확인해 주세요."
+        )
+        st.code(str(error))
+
+
+# -----------------------------
+# 7. 저장 파일 안내
+# -----------------------------
+with st.expander("저장 파일 안내"):
+    st.write(
+        f"저장 위치: `{RECORD_FILE.as_posix()}`"
+    )
+
+    st.write(
+        "새로고침하면 JSON 파일에서 기록을 다시 불러옵니다. "
+        "단, Streamlit Cloud에서는 앱 재배포나 재시작 후 "
+        "파일이 유지되지 않을 수 있으므로, "
+        "필요하면 JSON 파일을 별도로 보관하세요."
+    )
 
 
 # -----------------------------
@@ -590,7 +368,6 @@ st.plotly_chart(
 st.divider()
 
 st.caption(
-    "주의: 이 페이지는 데이터의 분포와 통계적 관련성을 "
-    "탐색하기 위한 학습용 도구입니다. 그래프에서 나타나는 "
-    "차이만으로 특정 요인이 뇌졸중의 원인이라고 단정할 수 없습니다."
+    "학습용 데이터 탐색 화면입니다. "
+    "이 앱은 실제 뇌졸중 위험을 진단하거나 예측하지 않습니다."
 )
