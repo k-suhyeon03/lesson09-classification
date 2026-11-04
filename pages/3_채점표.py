@@ -4,35 +4,33 @@ import pandas as pd
 import numpy as np
 
 from sklearn.linear_model import LogisticRegression
-from sklearn.tree import DecisionTreeClassifier
 from sklearn.preprocessing import StandardScaler
-from sklearn.pipeline import Pipeline
-from sklearn.metrics import accuracy_score, confusion_matrix
+from sklearn.pipeline import make_pipeline
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.metrics import confusion_matrix
 
 
-# =========================================================
+# --------------------------------------------------
 # 1. 페이지 설정
-# =========================================================
+# --------------------------------------------------
+
 st.set_page_config(
     page_title="채점표",
-    page_icon="📋",
+    page_icon="🧠",
     layout="wide"
 )
 
-st.title("📋 뇌졸중 분류 모델 채점표")
+st.title("🧠 분류 모델 채점표")
 st.write(
-    "테스트 데이터를 이용하여 두 분류 모델의 예측 결과를 평가합니다."
-)
-
-st.info(
-    "뇌졸중(stroke)이 1이면 양성(뇌졸중), "
-    "0이면 음성(뇌졸중 아님)입니다."
+    "학습한 분류 모델이 테스트 데이터의 뇌졸중 여부를 "
+    "얼마나 정확하게 예측했는지 평가합니다."
 )
 
 
-# =========================================================
+# --------------------------------------------------
 # 2. 데이터 불러오기
-# =========================================================
+# --------------------------------------------------
+
 DATA_URL = (
     "https://raw.githubusercontent.com/"
     "k-suhyeon03/data/refs/heads/main/stroke.csv"
@@ -41,61 +39,83 @@ DATA_URL = (
 
 @st.cache_data
 def load_data():
-    return pd.read_csv(DATA_URL, encoding="utf-8")
+    df = pd.read_csv(DATA_URL, encoding="utf-8")
+    return df
 
 
 try:
     df = load_data()
+
 except Exception as e:
     st.error("데이터를 불러오는 중 오류가 발생했습니다.")
     st.exception(e)
     st.stop()
 
 
-# =========================================================
-# 3. 입력 속성 선택
-# =========================================================
-st.header("1. 분류에 사용할 속성 선택")
+# --------------------------------------------------
+# 3. 변수 설정
+# --------------------------------------------------
 
-feature_labels = {
-    "나이": "age",
-    "평균 혈당": "avg_glucose_level",
-    "체질량지수": "bmi",
-    "고혈압": "hypertension",
-    "심장병": "heart_disease"
+FEATURE_LABELS = {
+    "age": "나이",
+    "avg_glucose_level": "평균 혈당",
+    "bmi": "체질량지수",
+    "hypertension": "고혈압",
+    "heart_disease": "심장병"
 }
 
-default_features = [
-    "나이",
-    "평균 혈당",
-    "고혈압",
-    "심장병"
+DISPLAY_LABELS = {
+    "id": "ID",
+    "age": "나이",
+    "avg_glucose_level": "평균 혈당",
+    "hypertension": "고혈압",
+    "heart_disease": "심장병"
+}
+
+DEFAULT_FEATURES = [
+    "age",
+    "avg_glucose_level",
+    "hypertension",
+    "heart_disease"
 ]
 
-selected_labels = st.multiselect(
-    "모델의 입력으로 사용할 속성을 선택하세요.",
-    options=list(feature_labels.keys()),
-    default=default_features
+
+# --------------------------------------------------
+# 4. 사용할 변수 선택
+# --------------------------------------------------
+
+st.subheader("1. 모델에 사용할 변수 선택")
+
+st.write(
+    "아래 변수 중 2개 이상을 선택해 주세요. "
+    "체질량지수(BMI)는 선택하지 않아도 됩니다."
 )
 
-if len(selected_labels) < 2:
-    st.warning("분류 모델을 만들려면 속성을 두 개 이상 선택해야 합니다.")
+selected_features = st.multiselect(
+    "분류 모델에 사용할 변수",
+    options=list(FEATURE_LABELS.keys()),
+    default=DEFAULT_FEATURES,
+    format_func=lambda x: FEATURE_LABELS[x]
+)
+
+if len(selected_features) < 2:
+    st.warning("분류 모델을 만들려면 변수를 2개 이상 선택해야 합니다.")
     st.stop()
 
-selected_features = [
-    feature_labels[label]
-    for label in selected_labels
+
+# --------------------------------------------------
+# 5. 데이터 전처리
+# --------------------------------------------------
+
+required_columns = [
+    "id",
+    "stroke",
+    "age",
+    "avg_glucose_level",
+    "bmi",
+    "hypertension",
+    "heart_disease"
 ]
-
-st.write("선택한 속성: " + ", ".join(selected_labels))
-
-
-# =========================================================
-# 4. 데이터 정리 및 학습용·테스트용 분리
-# =========================================================
-st.header("2. 학습용 데이터와 테스트용 데이터 분리")
-
-required_columns = ["id", "stroke"] + selected_features
 
 missing_columns = [
     col for col in required_columns
@@ -106,159 +126,261 @@ if missing_columns:
     st.error(f"데이터에 필요한 열이 없습니다: {missing_columns}")
     st.stop()
 
-data = df[required_columns].copy()
 
-data["id"] = pd.to_numeric(data["id"], errors="coerce")
-data["stroke"] = pd.to_numeric(data["stroke"], errors="coerce")
+# 원본 데이터의 모든 열을 유지
+data = df.copy()
 
-data = data.dropna(subset=["id", "stroke"])
-data = data[data["stroke"].isin([0, 1])].copy()
+# 숫자형으로 변환
+numeric_columns = [
+    "id",
+    "stroke",
+    "age",
+    "avg_glucose_level",
+    "bmi",
+    "hypertension",
+    "heart_disease"
+]
 
-data = data.sort_values("id").reset_index(drop=True)
-
-for col in selected_features:
+for col in numeric_columns:
     data[col] = pd.to_numeric(data[col], errors="coerce")
 
-# 번호 순으로 정렬한 뒤 10명 중 앞 3명을 테스트용으로 지정
+
+# ID와 정답이 없는 행 제거
+data = data.dropna(subset=["id", "stroke"])
+
+# 정답이 0 또는 1인 데이터만 사용
+data = data[data["stroke"].isin([0, 1])].copy()
+
+# ID 순서대로 정렬
+data = data.sort_values("id").reset_index(drop=True)
+
+
+if len(data) == 0:
+    st.error("분석에 사용할 데이터가 없습니다.")
+    st.stop()
+
+
+# 선택한 변수에 결측치가 있는지 확인
+# BMI는 아래에서 학습 데이터의 중앙값으로 처리
+for feature in selected_features:
+    if feature != "bmi" and data[feature].isna().any():
+        st.error(
+            f"선택한 변수 '{FEATURE_LABELS[feature]}'에 "
+            "결측치가 있습니다."
+        )
+        st.stop()
+
+
+# --------------------------------------------------
+# 6. 학습 데이터와 테스트 데이터 분리
+# --------------------------------------------------
+
+st.subheader("2. 학습 데이터와 테스트 데이터 분리")
+
+st.write(
+    "ID 순서대로 10명씩 묶은 뒤, "
+    "각 묶음에서 앞의 3명은 테스트 데이터, "
+    "나머지 7명은 학습 데이터로 사용합니다."
+)
+
+# 10명 중 앞의 3명을 테스트 데이터로 설정
 test_mask = np.arange(len(data)) % 10 < 3
 
+# 원본 데이터의 모든 열을 그대로 보존
 train_df = data.loc[~test_mask].copy().reset_index(drop=True)
 test_df = data.loc[test_mask].copy().reset_index(drop=True)
 
+# 선택한 변수만 모델 입력값으로 사용
 X_train = train_df[selected_features].copy()
 X_test = test_df[selected_features].copy()
 
 y_train = train_df["stroke"].astype(int)
 y_test = test_df["stroke"].astype(int)
 
-st.write(
-    f"전체 데이터 **{len(data):,}명** 중 "
-    f"학습용 **{len(train_df):,}명**, "
-    f"테스트용 **{len(test_df):,}명**으로 나누었습니다."
-)
 
-if len(test_df) != 1533:
-    st.warning(
-        f"현재 테스트 데이터는 {len(test_df):,}명입니다. "
-        "요청한 1,533명과 다르다면 원본 데이터의 행 수를 확인하세요."
-    )
-
-
-# =========================================================
-# 5. 결측치 처리
-# =========================================================
-st.header("3. 결측치 처리")
+# --------------------------------------------------
+# 7. BMI 결측치 처리
+# --------------------------------------------------
 
 if "bmi" in selected_features:
+
+    # 학습 데이터의 BMI 중앙값 계산
     bmi_median = X_train["bmi"].median()
 
     if pd.isna(bmi_median):
-        st.error("학습용 체질량지수 데이터에 유효한 값이 없습니다.")
+        st.error("학습 데이터에서 BMI 중앙값을 계산할 수 없습니다.")
         st.stop()
 
+    # 학습 데이터와 테스트 데이터 모두 학습 데이터 중앙값 사용
     X_train["bmi"] = X_train["bmi"].fillna(bmi_median)
     X_test["bmi"] = X_test["bmi"].fillna(bmi_median)
 
-    st.write(
-        f"체질량지수의 결측값은 학습용 데이터의 중앙값 "
-        f"**{bmi_median:.2f}**으로 채웠습니다."
+
+# --------------------------------------------------
+# 8. 모델 학습
+# --------------------------------------------------
+
+st.subheader("3. 분류 모델 학습")
+
+# 로지스틱 회귀
+# 표준화는 학습 데이터에 대해서만 학습
+logistic_model = make_pipeline(
+    StandardScaler(),
+    LogisticRegression(
+        random_state=42,
+        max_iter=1000
     )
-else:
-    st.write("체질량지수를 선택하지 않아 BMI 결측치 처리는 생략했습니다.")
+)
 
-if X_train.isna().any().any() or X_test.isna().any().any():
-    st.error(
-        "선택한 속성에 BMI 이외의 결측값이 있습니다. "
-        "원본 데이터를 확인해 주세요."
-    )
-    st.stop()
+logistic_model.fit(X_train, y_train)
 
-
-# =========================================================
-# 6. 두 모델 학습
-# =========================================================
-st.header("4. 분류 모델 학습")
-
-# 로지스틱 회귀: 표준화 포함
-logistic_model = Pipeline([
-    ("scaler", StandardScaler()),
-    (
-        "model",
-        LogisticRegression(
-            max_iter=1000,
-            random_state=42
-        )
-    )
-])
-
-# 의사결정트리: 최대 깊이 3, 최소 잎 노드 인원 5명
+# 의사결정트리
 tree_model = DecisionTreeClassifier(
     max_depth=3,
     min_samples_leaf=5,
     random_state=42
 )
 
-logistic_model.fit(X_train, y_train)
 tree_model.fit(X_train, y_train)
 
-st.success("두 모델의 학습이 완료되었습니다.")
+
+# --------------------------------------------------
+# 9. 테스트 데이터 예측
+# --------------------------------------------------
+
+logistic_pred = logistic_model.predict(X_test)
+tree_pred = tree_model.predict(X_test)
+
+# 로지스틱 회귀의 뇌졸중 예측 확률
+logistic_probability = logistic_model.predict_proba(X_test)[:, 1]
 
 
-# =========================================================
-# 7. 예측 결과 계산
-# =========================================================
-logistic_train_pred = logistic_model.predict(X_train)
-logistic_test_pred = logistic_model.predict(X_test)
+# --------------------------------------------------
+# 10. 기준 모델
+# --------------------------------------------------
 
-tree_train_pred = tree_model.predict(X_train)
-tree_test_pred = tree_model.predict(X_test)
-
-# 기준 모델: 학습용 데이터에서 더 많은 쪽만 예측
+# 학습 데이터에서 더 많은 비율을 차지하는 클래스를 확인
 majority_class = int(y_train.value_counts().idxmax())
 
-baseline_train_pred = np.full(
-    len(y_train),
-    majority_class
-)
-
-baseline_test_pred = np.full(
+# 모든 테스트 데이터를 다수 클래스라고 예측
+baseline_pred = np.full(
     len(y_test),
     majority_class
 )
 
 
-# =========================================================
-# 8. 혼동행렬 계산 함수
-# =========================================================
-def get_confusion_values(y_true, y_pred):
-    """
-    양성: 뇌졸중(1)
-    음성: 뇌졸중 아님(0)
+# --------------------------------------------------
+# 11. 혼동행렬 및 평가 지표 계산 함수
+# --------------------------------------------------
 
-    반환 순서: TN, FP, FN, TP
-    """
-    matrix = confusion_matrix(
+def calculate_metrics(y_true, y_pred):
+
+    cm = confusion_matrix(
         y_true,
         y_pred,
         labels=[0, 1]
     )
 
-    tn = int(matrix[0, 0])
-    fp = int(matrix[0, 1])
-    fn = int(matrix[1, 0])
-    tp = int(matrix[1, 1])
+    tn, fp, fn, tp = cm.ravel()
 
-    return tn, fp, fn, tp
+    total = tn + fp + fn + tp
+
+    accuracy = (tp + tn) / total if total > 0 else None
+
+    actual_positive = tp + fn
+    predicted_positive = tp + fp
+
+    if actual_positive > 0:
+        recall = tp / actual_positive
+    else:
+        recall = None
+
+    if predicted_positive > 0:
+        precision = tp / predicted_positive
+    else:
+        precision = None
+
+    if precision is not None and recall is not None:
+        if precision + recall > 0:
+            f1 = (
+                2 * precision * recall
+                / (precision + recall)
+            )
+        else:
+            f1 = None
+    else:
+        f1 = None
+
+    return {
+        "cm": cm,
+        "TN": tn,
+        "FP": fp,
+        "FN": fn,
+        "TP": tp,
+        "accuracy": accuracy,
+        "recall": recall,
+        "precision": precision,
+        "f1": f1
+    }
 
 
-def make_confusion_table(y_true, y_pred):
-    tn, fp, fn, tp = get_confusion_values(
-        y_true,
-        y_pred
+logistic_result = calculate_metrics(
+    y_test,
+    logistic_pred
+)
+
+tree_result = calculate_metrics(
+    y_test,
+    tree_pred
+)
+
+baseline_result = calculate_metrics(
+    y_test,
+    baseline_pred
+)
+
+
+# --------------------------------------------------
+# 12. 테스트 데이터 정보
+# --------------------------------------------------
+
+st.subheader("4. 테스트 데이터 구성")
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.metric(
+        "테스트 데이터 수",
+        f"{len(y_test):,}명"
     )
 
-    # 행은 실제, 열은 예측
-    table = pd.DataFrame(
+with col2:
+    st.metric(
+        "실제 뇌졸중 인원",
+        f"{int((y_test == 1).sum()):,}명"
+    )
+
+with col3:
+    st.metric(
+        "실제 정상 인원",
+        f"{int((y_test == 0).sum()):,}명"
+    )
+
+
+# --------------------------------------------------
+# 13. 혼동행렬 출력 함수
+# --------------------------------------------------
+
+def display_confusion_matrix(result, title):
+
+    st.markdown(f"#### {title}")
+
+    tn = result["TN"]
+    fp = result["FP"]
+    fn = result["FN"]
+    tp = result["TP"]
+
+    matrix_df = pd.DataFrame(
         [
             [
                 f"TN\n{tn:,}명",
@@ -277,276 +399,273 @@ def make_confusion_table(y_true, y_pred):
             ]
         ],
         index=[
-            "실제 뇌졸중 아님 (0)",
+            "실제 정상 (0)",
             "실제 뇌졸중 (1)",
-            "열 합계"
+            "합계"
         ],
         columns=[
-            "예측 뇌졸중 아님 (0)",
+            "예측 정상 (0)",
             "예측 뇌졸중 (1)",
-            "행 합계"
+            "합계"
         ]
     )
 
-    return table
+    st.table(matrix_df)
 
 
-# =========================================================
-# 9. 혼동행렬 표시
-# =========================================================
-st.header("5. 테스트 데이터 혼동행렬")
+# --------------------------------------------------
+# 14. 혼동행렬 비교
+# --------------------------------------------------
 
-test_positive_count = int((y_test == 1).sum())
+st.subheader("5. 혼동행렬 비교")
 
 st.write(
-    f"테스트용 데이터는 **{len(y_test):,}명**이며, "
-    f"그중 실제 뇌졸중인 사람은 **{test_positive_count:,}명**입니다."
+    "혼동행렬은 실제 정답과 모델의 예측 결과를 비교한 표입니다."
 )
 
-st.caption(
-    "행은 실제 정답, 열은 모델의 예측입니다. "
-    "TP는 실제 뇌졸중을 뇌졸중으로 예측한 사람, "
-    "TN은 실제 뇌졸중 아님을 뇌졸중 아님으로 예측한 사람입니다. "
-    "FP는 헛짚은 사람, FN은 놓친 사람입니다."
+col1, col2 = st.columns(2)
+
+with col1:
+    display_confusion_matrix(
+        logistic_result,
+        "로지스틱 회귀 (확률로 답하는 모델)"
+    )
+
+with col2:
+    display_confusion_matrix(
+        tree_result,
+        "의사결정트리 (질문으로 답하는 모델)"
+    )
+
+
+# --------------------------------------------------
+# 15. 혼동행렬 용어 설명
+# --------------------------------------------------
+
+with st.expander("혼동행렬의 항목 알아보기"):
+
+    st.markdown("""
+    - **TN (진짜 음성)**: 실제 정상인 사람을 정상으로 예측
+    - **FP (거짓 양성)**: 실제 정상인 사람을 뇌졸중으로 예측
+    - **FN (거짓 음성)**: 실제 뇌졸중인 사람을 정상으로 예측
+    - **TP (진짜 양성)**: 실제 뇌졸중인 사람을 뇌졸중으로 예측
+    """)
+
+
+# --------------------------------------------------
+# 16. 평가 지표 계산 및 비교
+# --------------------------------------------------
+
+st.subheader("6. 모델 성능 평가")
+
+st.write(
+    "정확도, 재현율, 정밀도, F1 점수를 이용해 "
+    "세 가지 모델의 성능을 비교합니다."
 )
-
-st.subheader("로지스틱 회귀 (확률로 답하는 모델)")
-
-logistic_matrix = make_confusion_table(
-    y_test,
-    logistic_test_pred
-)
-
-st.table(logistic_matrix)
-
-st.subheader("의사결정트리 (질문으로 답하는 모델)")
-
-tree_matrix = make_confusion_table(
-    y_test,
-    tree_test_pred
-)
-
-st.table(tree_matrix)
-
-
-# =========================================================
-# 10. 정확도·재현율·정밀도·F1 계산
-# =========================================================
-def calculate_metrics(y_true, y_pred):
-    tn, fp, fn, tp = get_confusion_values(
-        y_true,
-        y_pred
-    )
-
-    total = tn + fp + fn + tp
-
-    # 정확도: 전체 중 올바르게 예측한 비율
-    accuracy = (
-        (tp + tn) / total
-        if total > 0 else None
-    )
-
-    # 재현율: 실제 뇌졸중인 사람 중 뇌졸중이라고 예측한 비율
-    actual_positive = tp + fn
-
-    recall = (
-        tp / actual_positive
-        if actual_positive > 0 else None
-    )
-
-    # 정밀도: 뇌졸중이라고 예측한 사람 중 실제 뇌졸중인 비율
-    predicted_positive = tp + fp
-
-    precision = (
-        tp / predicted_positive
-        if predicted_positive > 0 else None
-    )
-
-    # F1 = 2 * 정밀도 * 재현율 / (정밀도 + 재현율)
-    if precision is None or recall is None:
-        f1 = None
-    elif precision + recall == 0:
-        f1 = None
-    else:
-        f1 = (
-            2 * precision * recall
-            / (precision + recall)
-        )
-
-    return {
-        "정확도": accuracy,
-        "재현율": recall,
-        "정밀도": precision,
-        "F1": f1
-    }
 
 
 def format_metric(value):
+
     if value is None:
         return "계산할 수 없음"
 
     return f"{value * 100:.2f}%"
 
 
-# 각 모델의 훈련용·테스트용 지표
-logistic_train_metrics = calculate_metrics(
-    y_train,
-    logistic_train_pred
-)
-
-logistic_test_metrics = calculate_metrics(
-    y_test,
-    logistic_test_pred
-)
-
-tree_train_metrics = calculate_metrics(
-    y_train,
-    tree_train_pred
-)
-
-tree_test_metrics = calculate_metrics(
-    y_test,
-    tree_test_pred
-)
-
-baseline_train_metrics = calculate_metrics(
-    y_train,
-    baseline_train_pred
-)
-
-baseline_test_metrics = calculate_metrics(
-    y_test,
-    baseline_test_pred
-)
-
-
-# =========================================================
-# 11. 세 모델의 평가 지표 비교
-# =========================================================
-st.header("6. 세 모델의 평가 지표 비교")
-
-st.write(
-    "정확도, 재현율, 정밀도, F1은 모두 테스트 데이터를 기준으로 "
-    "비교합니다. 훈련용에서 많은 쪽만 예측하는 모델도 함께 표시합니다."
-)
-
-metric_table = pd.DataFrame([
+metrics_df = pd.DataFrame(
     {
-        "모델": "로지스틱 회귀 (확률로 답하는 모델)",
-        "정확도": format_metric(logistic_test_metrics["정확도"]),
-        "재현율": format_metric(logistic_test_metrics["재현율"]),
-        "정밀도": format_metric(logistic_test_metrics["정밀도"]),
-        "F1": format_metric(logistic_test_metrics["F1"])
-    },
-    {
-        "모델": "의사결정트리 (질문으로 답하는 모델)",
-        "정확도": format_metric(tree_test_metrics["정확도"]),
-        "재현율": format_metric(tree_test_metrics["재현율"]),
-        "정밀도": format_metric(tree_test_metrics["정밀도"]),
-        "F1": format_metric(tree_test_metrics["F1"])
-    },
-    {
-        "모델": "훈련용에서 많은 쪽만 예측하는 모델",
-        "정확도": format_metric(baseline_test_metrics["정확도"]),
-        "재현율": format_metric(baseline_test_metrics["재현율"]),
-        "정밀도": format_metric(baseline_test_metrics["정밀도"]),
-        "F1": format_metric(baseline_test_metrics["F1"])
+        "모델": [
+            "로지스틱 회귀",
+            "의사결정트리",
+            "기준 모델"
+        ],
+        "정확도": [
+            format_metric(logistic_result["accuracy"]),
+            format_metric(tree_result["accuracy"]),
+            format_metric(baseline_result["accuracy"])
+        ],
+        "재현율": [
+            format_metric(logistic_result["recall"]),
+            format_metric(tree_result["recall"]),
+            format_metric(baseline_result["recall"])
+        ],
+        "정밀도": [
+            format_metric(logistic_result["precision"]),
+            format_metric(tree_result["precision"]),
+            format_metric(baseline_result["precision"])
+        ],
+        "F1 점수": [
+            format_metric(logistic_result["f1"]),
+            format_metric(tree_result["f1"]),
+            format_metric(baseline_result["f1"])
+        ]
     }
-])
+)
 
 st.dataframe(
-    metric_table,
+    metrics_df,
     use_container_width=True,
     hide_index=True
 )
 
 
-# =========================================================
-# 12. 놓친 환자와 헛짚은 사람 목록
-# =========================================================
-st.header("7. 잘못 예측한 사람 확인")
+# --------------------------------------------------
+# 17. 평가 지표 설명
+# --------------------------------------------------
+
+with st.expander("평가 지표의 의미와 계산 방법"):
+
+    st.markdown("""
+    **① 정확도 (Accuracy)**
+
+    전체 예측 중 실제 정답을 맞힌 비율입니다.
+
+    \[
+    정확도 = \\frac{TP+TN}{TP+TN+FP+FN}
+    \]
+
+    **② 재현율 (Recall)**
+
+    실제 뇌졸중인 사람 중 모델이 뇌졸중이라고 예측한 비율입니다.
+
+    \[
+    재현율 = \\frac{TP}{TP+FN}
+    \]
+
+    **③ 정밀도 (Precision)**
+
+    모델이 뇌졸중이라고 예측한 사람 중 실제 뇌졸중인 비율입니다.
+
+    \[
+    정밀도 = \\frac{TP}{TP+FP}
+    \]
+
+    **④ F1 점수 (F1 Score)**
+
+    정밀도와 재현율의 조화평균입니다.
+
+    \[
+    F1 = 2 \\times \\frac{정밀도 \\times 재현율}
+    {정밀도+재현율}
+    \]
+
+    정밀도 또는 재현율을 계산할 수 없는 경우 F1 점수도 계산할 수 없습니다.
+    """)
+
+
+# --------------------------------------------------
+# 18. 기준 모델 설명
+# --------------------------------------------------
+
+with st.expander("기준 모델이란?"):
+
+    st.write(
+        f"기준 모델은 학습 데이터에서 더 많은 비율을 차지하는 "
+        f"클래스인 {majority_class}만을 모든 테스트 데이터의 "
+        "예측 결과로 사용하는 모델입니다."
+    )
+
+    if majority_class == 0:
+        st.write(
+            "현재 학습 데이터에서는 정상(0)이 더 많으므로 "
+            "모든 사람을 정상이라고 예측합니다."
+        )
+    else:
+        st.write(
+            "현재 학습 데이터에서는 뇌졸중(1)이 더 많으므로 "
+            "모든 사람을 뇌졸중이라고 예측합니다."
+        )
+
+    st.write(
+        "이 모델의 성능과 다른 분류 모델의 성능을 비교하면 "
+        "분류 모델이 단순한 다수 클래스 예측보다 얼마나 나은지 "
+        "확인할 수 있습니다."
+    )
+
+
+# --------------------------------------------------
+# 19. 오답 데이터 확인
+# --------------------------------------------------
+
+st.subheader("7. 모델의 오답 데이터 확인")
 
 st.write(
-    "모델이 잘못 예측한 사람을 확인합니다. "
-    "모델을 선택하면 해당 모델의 놓친 환자와 헛짚은 사람 목록이 표시됩니다."
+    "선택한 모델이 테스트 데이터에서 잘못 예측한 사례를 확인합니다."
 )
-
-model_options = {
-    "로지스틱 회귀 (확률로 답하는 모델)": logistic_test_pred,
-    "의사결정트리 (질문으로 답하는 모델)": tree_test_pred
-}
 
 selected_model_name = st.selectbox(
-    "목록을 확인할 모델을 선택하세요.",
-    options=list(model_options.keys())
+    "오답을 확인할 모델 선택",
+    [
+        "로지스틱 회귀 (확률로 답하는 모델)",
+        "의사결정트리 (질문으로 답하는 모델)"
+    ]
 )
 
-selected_prediction = model_options[selected_model_name]
+
+if selected_model_name.startswith("로지스틱"):
+
+    selected_pred = logistic_pred
+    selected_result = logistic_result
+
+else:
+
+    selected_pred = tree_pred
+    selected_result = tree_result
 
 
-# =========================================================
-# 13. 오류 예측 데이터 구성
-# =========================================================
-# 테스트 데이터 원본에서 번호와 표시할 속성을 가져옴
-display_columns = [
-    "id",
-    "age",
-    "avg_glucose_level",
-    "hypertension",
-    "heart_disease"
-]
+# --------------------------------------------------
+# 20. 테스트 데이터의 예측 결과 정리
+# --------------------------------------------------
 
-available_display_columns = [
-    col for col in display_columns
-    if col in df.columns
-]
-
-test_details = df.loc[
-    test_df.index if False else test_df.index
-].copy()
-
-# 분할된 테스트 데이터의 원래 행을 기준으로 표시 데이터 구성
-# data는 번호 순으로 정렬된 데이터이므로 id를 기준으로 연결
+# test_df에는 선택한 변수 외의 원본 정보도 그대로 남아 있음
 test_details = test_df[
-    ["id", "stroke"]
-].merge(
-    data[available_display_columns + ["id"]],
-    on="id",
-    how="left"
-)
-
-test_details["실제"] = y_test.to_numpy()
-test_details["예측"] = selected_prediction
-
-# 실제 뇌졸중인데 뇌졸중 아님으로 예측한 사람(FN)
-missed_people = test_details[
-    (test_details["실제"] == 1)
-    & (test_details["예측"] == 0)
+    [
+        "id",
+        "age",
+        "avg_glucose_level",
+        "hypertension",
+        "heart_disease"
+    ]
 ].copy()
 
-# 실제 뇌졸중 아님인데 뇌졸중으로 예측한 사람(FP)
-false_alarm_people = test_details[
-    (test_details["실제"] == 0)
-    & (test_details["예측"] == 1)
+test_details["실제 결과"] = y_test.to_numpy()
+test_details["예측 결과"] = selected_pred
+
+# 실제 뇌졸중인데 정상으로 예측한 경우
+false_negative = test_details[
+    (test_details["실제 결과"] == 1)
+    & (test_details["예측 결과"] == 0)
 ].copy()
 
-# 나이가 많은 순서로 정렬
-missed_people = missed_people.sort_values(
-    "age",
-    ascending=False
-)
-
-false_alarm_people = false_alarm_people.sort_values(
-    "age",
-    ascending=False
-)
+# 실제 정상인데 뇌졸중으로 예측한 경우
+false_positive = test_details[
+    (test_details["실제 결과"] == 0)
+    & (test_details["예측 결과"] == 1)
+].copy()
 
 
-# =========================================================
-# 14. 목록 표시용 데이터 가공
-# =========================================================
-def prepare_display_table(person_df):
-    result = person_df[
+# --------------------------------------------------
+# 21. 오답 데이터 표시 함수
+# --------------------------------------------------
+
+def display_error_table(error_df, error_type, description):
+
+    st.markdown(f"#### {error_type} ({len(error_df):,}명)")
+
+    st.write(description)
+
+    if len(error_df) == 0:
+        st.success("해당 유형의 오답이 없습니다.")
+        return
+
+    # 나이가 많은 순서대로 정렬
+    error_df = error_df.sort_values(
+        "age",
+        ascending=False
+    )
+
+    # 표시할 열 이름 변경
+    display_df = error_df[
         [
             "id",
             "age",
@@ -554,110 +673,87 @@ def prepare_display_table(person_df):
             "hypertension",
             "heart_disease"
         ]
-    ].copy()
-
-    result = result.rename(columns={
-        "id": "번호",
-        "age": "나이",
-        "avg_glucose_level": "평균 혈당",
-        "hypertension": "고혈압 여부",
-        "heart_disease": "심장병 여부"
-    })
-
-    result["고혈압 여부"] = result["고혈압 여부"].map({
-        0: "없음",
-        1: "있음"
-    }).fillna("정보 없음")
-
-    result["심장병 여부"] = result["심장병 여부"].map({
-        0: "없음",
-        1: "있음"
-    }).fillna("정보 없음")
-
-    result["나이"] = pd.to_numeric(
-        result["나이"],
-        errors="coerce"
+    ].rename(
+        columns={
+            "id": "ID",
+            "age": "나이",
+            "avg_glucose_level": "평균 혈당",
+            "hypertension": "고혈압",
+            "heart_disease": "심장병"
+        }
     )
 
-    result["평균 혈당"] = pd.to_numeric(
-        result["평균 혈당"],
-        errors="coerce"
-    ).round(2)
+    st.caption(
+        f"총 {len(display_df):,}명 중 최대 20명까지 표시합니다. "
+        "나이가 많은 순서입니다."
+    )
 
-    result["번호"] = result["번호"].astype(int)
-
-    return result
-
-
-missed_display = prepare_display_table(missed_people)
-false_alarm_display = prepare_display_table(false_alarm_people)
+    st.dataframe(
+        display_df.head(20),
+        use_container_width=True,
+        hide_index=True
+    )
 
 
-# =========================================================
-# 15. 두 목록 나란히 표시
-# =========================================================
+# --------------------------------------------------
+# 22. 거짓 음성 및 거짓 양성 출력
+# --------------------------------------------------
+
 col1, col2 = st.columns(2)
 
 with col1:
-    st.subheader(
-        f"놓친 환자 (FN): {len(missed_display):,}명"
-    )
 
-    st.caption(
-        "실제 뇌졸중이지만 모델이 뇌졸중 아님으로 예측한 사람"
+    display_error_table(
+        false_negative,
+        "거짓 음성 (FN)",
+        "실제로 뇌졸중인 사람을 정상이라고 잘못 예측한 사례입니다."
     )
-
-    st.dataframe(
-        missed_display.head(20),
-        use_container_width=True,
-        hide_index=True
-    )
-
-    if len(missed_display) > 20:
-        st.caption(
-            f"전체 {len(missed_display):,}명 중 "
-            "나이가 많은 순서로 앞 20명만 표시했습니다."
-        )
 
 with col2:
-    st.subheader(
-        f"헛짚은 사람 (FP): {len(false_alarm_display):,}명"
+
+    display_error_table(
+        false_positive,
+        "거짓 양성 (FP)",
+        "실제로 정상인 사람을 뇌졸중이라고 잘못 예측한 사례입니다."
     )
 
-    st.caption(
-        "실제 뇌졸중은 아니지만 모델이 뇌졸중이라고 예측한 사람"
+
+# --------------------------------------------------
+# 23. 오답 수와 혼동행렬 비교
+# --------------------------------------------------
+
+st.markdown("#### 오답 수 확인")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    st.metric(
+        "거짓 음성 (FN)",
+        f"{len(false_negative):,}명",
+        help="혼동행렬에서 FN에 해당하는 수와 같습니다."
     )
 
-    st.dataframe(
-        false_alarm_display.head(20),
-        use_container_width=True,
-        hide_index=True
+with col2:
+    st.metric(
+        "거짓 양성 (FP)",
+        f"{len(false_positive):,}명",
+        help="혼동행렬에서 FP에 해당하는 수와 같습니다."
     )
-
-    if len(false_alarm_display) > 20:
-        st.caption(
-            f"전체 {len(false_alarm_display):,}명 중 "
-            "나이가 많은 순서로 앞 20명만 표시했습니다."
-        )
-
-
-# =========================================================
-# 16. 혼동행렬과 목록 인원수 확인
-# =========================================================
-st.divider()
-
-selected_tn, selected_fp, selected_fn, selected_tp = (
-    get_confusion_values(y_test, selected_prediction)
-)
-
-st.write(
-    f"선택한 모델의 혼동행렬에서 FN은 **{selected_fn:,}명**, "
-    f"FP는 **{selected_fp:,}명**이며, "
-    f"위 목록의 놓친 환자 **{len(missed_display):,}명**, "
-    f"헛짚은 사람 **{len(false_alarm_display):,}명**과 일치합니다."
-)
 
 st.caption(
-    "※ 이 페이지는 분류 알고리즘의 성능을 비교하는 교육용 실습입니다. "
-    "실제 의료 진단이나 뇌졸중 위험 판단에 사용할 수 없습니다."
+    "거짓 음성의 인원은 혼동행렬의 FN과, "
+    "거짓 양성의 인원은 혼동행렬의 FP와 일치합니다."
+)
+
+
+# --------------------------------------------------
+# 24. 마무리 안내
+# --------------------------------------------------
+
+st.divider()
+
+st.info(
+    "이 페이지는 분류 모델의 작동 원리와 평가 방법을 학습하기 위한 "
+    "실습 자료입니다. 실제 뇌졸중 진단이나 의료적 판단에 "
+    "사용할 수 있는 프로그램은 아닙니다."
 )
