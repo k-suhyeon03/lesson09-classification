@@ -120,7 +120,6 @@ if missing_columns:
     st.stop()
 
 
-# 모든 원본 열 유지
 data = df.copy()
 
 numeric_columns = [
@@ -139,17 +138,14 @@ for col in numeric_columns:
         errors="coerce"
     )
 
-# ID와 정답이 없는 행 제거
 data = data.dropna(
     subset=["id", "stroke"]
 )
 
-# 정답이 0 또는 1인 데이터만 사용
 data = data[
     data["stroke"].isin([0, 1])
 ].copy()
 
-# ID 순서대로 정렬
 data = data.sort_values(
     "id"
 ).reset_index(drop=True)
@@ -159,7 +155,6 @@ if len(data) == 0:
     st.stop()
 
 
-# BMI 이외 선택 속성에 결측치가 있는지 확인
 for feature in selected_features:
 
     if feature != "bmi" and data[feature].isna().any():
@@ -183,7 +178,6 @@ st.write(
     "나머지 7명은 학습 데이터로 사용합니다."
 )
 
-# 10명 중 앞의 3명은 테스트 데이터
 test_mask = np.arange(len(data)) % 10 < 3
 
 train_df = data.loc[
@@ -194,7 +188,6 @@ test_df = data.loc[
     test_mask
 ].copy().reset_index(drop=True)
 
-# 선택한 속성만 모델 입력값으로 사용
 X_train = train_df[selected_features].copy()
 X_test = test_df[selected_features].copy()
 
@@ -208,14 +201,12 @@ y_test = test_df["stroke"].astype(int)
 
 if "bmi" in selected_features:
 
-    # 훈련 데이터의 중앙값 계산
     bmi_median = X_train["bmi"].median()
 
     if pd.isna(bmi_median):
         st.error("훈련 데이터에서 BMI 중앙값을 계산할 수 없습니다.")
         st.stop()
 
-    # 훈련 데이터와 테스트 데이터 모두 훈련용 중앙값으로 채움
     X_train["bmi"] = X_train["bmi"].fillna(
         bmi_median
     )
@@ -236,7 +227,7 @@ st.write(
     "클래스별 데이터 수의 차이를 고려한 모델을 각각 학습합니다."
 )
 
-# 로지스틱 회귀 - 가중치 적용 전
+# 로지스틱 회귀 - 적용 전
 logistic_before = make_pipeline(
     StandardScaler(),
     LogisticRegression(
@@ -252,7 +243,7 @@ logistic_before.fit(
 )
 
 
-# 로지스틱 회귀 - 가중치 적용 후
+# 로지스틱 회귀 - 적용 후
 logistic_after = make_pipeline(
     StandardScaler(),
     LogisticRegression(
@@ -268,7 +259,7 @@ logistic_after.fit(
 )
 
 
-# 의사결정트리 - 가중치 적용 전
+# 의사결정트리 - 적용 전
 tree_before = DecisionTreeClassifier(
     max_depth=3,
     min_samples_leaf=5,
@@ -282,7 +273,7 @@ tree_before.fit(
 )
 
 
-# 의사결정트리 - 가중치 적용 후
+# 의사결정트리 - 적용 후
 tree_after = DecisionTreeClassifier(
     max_depth=3,
     min_samples_leaf=5,
@@ -367,7 +358,6 @@ def calculate_metrics(y_true, y_pred):
     }
 
 
-# 네 가지 모델의 결과 계산
 logistic_result_before = calculate_metrics(
     y_test,
     logistic_pred_before
@@ -390,7 +380,7 @@ tree_result_after = calculate_metrics(
 
 
 # --------------------------------------------------
-# 11. 지표 표시 함수
+# 11. 비교표 생성
 # --------------------------------------------------
 
 def format_metric(value):
@@ -566,17 +556,13 @@ st.caption(
     "훈련 데이터의 중앙값으로 고정합니다."
 )
 
-
-# 그래프에 사용할 속성 선택
 plot_features = selected_features[:3]
 
-plot_labels = [
-    FEATURE_LABELS[x]
-    for x in plot_features
-]
 
+# --------------------------------------------------
+# 17. 속성 범위 계산
+# --------------------------------------------------
 
-# 각 속성의 범위 계산 함수
 def get_feature_range(feature):
 
     values = X_train[feature].dropna()
@@ -585,7 +571,6 @@ def get_feature_range(feature):
     maximum = float(values.max())
 
     if minimum == maximum:
-
         minimum -= 1
         maximum += 1
 
@@ -597,18 +582,38 @@ def get_feature_range(feature):
     )
 
 
-# 나머지 속성을 중앙값으로 고정한 입력 데이터 생성
+# --------------------------------------------------
+# 18. 예측용 데이터 생성
+# --------------------------------------------------
+
 def make_prediction_data(feature_values):
 
+    # 수정된 부분:
+    # 입력 배열의 실제 길이를 기준으로 행 개수를 결정
+    if not feature_values:
+        raise ValueError("예측용 속성값이 없습니다.")
+
+    lengths = [
+        len(values)
+        for values in feature_values.values()
+    ]
+
+    if len(set(lengths)) != 1:
+        raise ValueError("예측용 속성 배열의 길이가 서로 다릅니다.")
+
+    row_count = lengths[0]
+
     grid_df = pd.DataFrame(
-        index=range(len(feature_values))
+        index=range(row_count)
     )
 
     for feature in selected_features:
 
         if feature in feature_values:
 
-            grid_df[feature] = feature_values[feature]
+            grid_df[feature] = np.asarray(
+                feature_values[feature]
+            )
 
         else:
 
@@ -620,7 +625,7 @@ def make_prediction_data(feature_values):
 
 
 # --------------------------------------------------
-# 17. 2차원 산점도 및 경계선
+# 19. 2차원 산점도 및 경계선
 # --------------------------------------------------
 
 def draw_2d_plot():
@@ -648,7 +653,6 @@ def draw_2d_plot():
         grid_values
     )
 
-    # 각 모델의 예측 확률
     probabilities = {
         "로지스틱 회귀 - 적용 전": (
             logistic_before.predict_proba(grid_df)[:, 1]
@@ -710,7 +714,6 @@ def draw_2d_plot():
 
     boundary_messages = []
 
-    # 네 가지 모델의 0.5 경계 표시
     for name, probability in probabilities.items():
 
         z = probability.reshape(xx.shape)
@@ -720,7 +723,6 @@ def draw_2d_plot():
 
         if p_min <= 0.5 <= p_max:
 
-            # 0.5 등고선
             fig.add_trace(
                 go.Contour(
                     x=x_values,
@@ -792,7 +794,7 @@ def draw_2d_plot():
 
 
 # --------------------------------------------------
-# 18. 3차원 산점도 및 경계면
+# 20. 3차원 산점도 및 경계면
 # --------------------------------------------------
 
 def draw_3d_plot():
@@ -822,6 +824,8 @@ def draw_3d_plot():
         z_feature: zz.ravel()
     }
 
+    # 수정된 make_prediction_data 함수가
+    # 28 x 28 x 28개의 격자 데이터를 모두 생성함
     grid_df = make_prediction_data(
         grid_values
     )
@@ -903,8 +907,8 @@ def draw_3d_plot():
                     y=yy.ravel(),
                     z=zz.ravel(),
                     value=probability,
-                    isomin=0.49,
-                    isomax=0.51,
+                    isomin=0.5,
+                    isomax=0.5,
                     surface_count=1,
                     opacity=0.30,
                     colorscale=[
@@ -969,7 +973,7 @@ def draw_3d_plot():
 
 
 # --------------------------------------------------
-# 19. 선택 속성 수에 따라 그래프 표시
+# 21. 선택 속성 수에 따라 그래프 표시
 # --------------------------------------------------
 
 if len(selected_features) == 2:
@@ -993,7 +997,7 @@ else:
 
 
 # --------------------------------------------------
-# 20. 마무리 안내
+# 22. 마무리 안내
 # --------------------------------------------------
 
 st.divider()
